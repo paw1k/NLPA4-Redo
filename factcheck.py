@@ -116,7 +116,7 @@ class WordRecallThresholdFactChecker(FactChecker):
         # A threshold of 0.75 is a reasonable starting point.
         threshold = 0.75
 
-        fact_tokens = self._preprocess(self.fact)
+        fact_tokens = self._preprocess(fact)
 
         # If the fact has no processable tokens, it can't be supported.
         if not fact_tokens:
