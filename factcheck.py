@@ -7,33 +7,21 @@ from typing import List, Tuple, Dict, Iterable, Set
 import numpy as np
 import torch
 
-# --- New TextProcessingUtils Class ---
-# All global helper functions and constants from the original code
-# have been moved into this utility class as static methods
-# and class attributes.
 
 class TextProcessingUtils:
-    """
-    A utility class containing static methods for text processing,
-    such as tokenization, sentence splitting, and set-based metrics.
-    """
 
-    # Regex for finding words, including simple contractions
     TOKEN_REGEX = re.compile(r"[A-Za-z0-9]+(?:'[A-Za-z0-9]+)?")
 
-    # Set of common stopwords for filtering
     STOPWORD_SET = {
         "a","an","the","and","or","but","if","then","than","that","this","those","these","to","of","in","on","for","at",
         "by","with","as","is","are","was","were","be","been","being","from","it","its","into","about","over","under",
         "he","she","they","them","his","her","their","we","you","i","me","my","your","our","ours","yours","not","no"
     }
 
-    # Number regex
     NUMBER_REGEX = re.compile(r"\b\d{1,4}\b")
 
     @staticmethod
     def tokenize(text: str, *, lowercase: bool=True, remove_stop: bool=True) -> List[str]:
-        """Tokenizes text, with options for lowercasing and stopword removal."""
         if not text:
             return []
         if lowercase:
@@ -45,14 +33,13 @@ class TextProcessingUtils:
 
     @staticmethod
     def sent_split(text: str) -> List[str]:
-        """Splits text into sentences."""
         if not text:
             return []
         t = re.sub(r"</?s>", " ", text)
         t = re.sub(r"\s+", " ", t).strip()
         pieces = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9])", t)
         if len(pieces) == 1:
-            # Fallback for texts without clear sentence-ending punctuation followed by caps
+
             pieces = re.split(r"[\n]+|(?<=[.!?])", t)
             pieces = [p.strip() for p in pieces if p.strip()]
         else:
@@ -61,7 +48,6 @@ class TextProcessingUtils:
 
     @staticmethod
     def jaccard(a: Iterable[str], b: Iterable[str]) -> float:
-        """Calculates Jaccard similarity between two iterables of strings."""
         A = set(a); B = set(b)
         if not A and not B:
             return 0.0
@@ -70,7 +56,6 @@ class TextProcessingUtils:
 
     @staticmethod
     def recall(fact_tokens: Iterable[str], text_tokens: Iterable[str]) -> float:
-        """Calculates recall of fact_tokens present in text_tokens."""
         F = set(fact_tokens); T = set(text_tokens)
         if not F:
             return 0.0
@@ -78,7 +63,6 @@ class TextProcessingUtils:
 
     @staticmethod
     def numbers(text: str) -> set:
-        """Extracts a set of 1-4 digit numbers from a string."""
         return set(TextProcessingUtils.NUMBER_REGEX.findall(text or ""))
 
     @staticmethod
@@ -87,7 +71,6 @@ class TextProcessingUtils:
         return set(zip(tokens, tokens[1:])) if len(tokens) >= 2 else set()
 
 
-# --- Data Structures and Models (Unchanged) ---
 
 class FactExample(object):
     def __init__(self, fact: str, passages: List[dict], label: str):
@@ -143,8 +126,6 @@ class EntailmentModel(object):
         return out
 
 
-# --- FactChecker Classes (Updated to use TextProcessingUtils) ---
-
 class FactChecker(object):
     def predict(self, fact: str, passages: List[dict]) -> str:
         raise Exception("Don't call me, call my subclasses")
@@ -175,33 +156,26 @@ class WordRecallThresholdFactChecker(FactChecker):
     def _num_consistent(self, fact: str, sent: str) -> bool:
         if not self.require_number_consistency:
             return True
-        # Use TextProcessingUtils
         fnums = TextProcessingUtils.numbers(fact)
         if not fnums:
             return True
-        # Use TextProcessingUtils
         return len(fnums & TextProcessingUtils.numbers(sent)) > 0
 
     def predict(self, fact: str, passages: List[dict]) -> str:
-        # Use TextProcessingUtils
         fact_toks = TextProcessingUtils.tokenize(fact)
         if not fact_toks:
             return "NS"
 
-        # Use TextProcessingUtils
         fact_bi = TextProcessingUtils.bigrams(fact_toks)
         best_recall = 0.0
 
         for p in passages:
             text = p.get("text", "") or ""
-            # Use TextProcessingUtils
             for sent in TextProcessingUtils.sent_split(text):
-                # Use TextProcessingUtils
                 sent_toks = TextProcessingUtils.tokenize(sent)
                 if not sent_toks:
                     continue
 
-                # Use TextProcessingUtils
                 rec = TextProcessingUtils.recall(fact_toks, sent_toks)
                 if rec > best_recall:
                     best_recall = rec
@@ -211,9 +185,7 @@ class WordRecallThresholdFactChecker(FactChecker):
 
                 gate_ok = True
                 if self.require_bigram_or_jaccard:
-                    # Use TextProcessingUtils
                     shared_bi = len(fact_bi & TextProcessingUtils.bigrams(sent_toks))
-                    # Use TextProcessingUtils
                     jac = TextProcessingUtils.jaccard(fact_toks, sent_toks)
                     gate_ok = (shared_bi > 0) or (jac >= self.jaccard_gate)
 
@@ -226,7 +198,7 @@ class WordRecallThresholdFactChecker(FactChecker):
 class EntailmentFactChecker(FactChecker):
     def __init__(self, ent_model: EntailmentModel,
                  entail_threshold: float = 0.44,
-                 prune_recall: float = 0.04,
+                 prune_recall: float = 0.0,
                  use_pair_windows: bool = True,
                  max_pair_chars: int = 360):
         self.ent_model = ent_model
@@ -236,7 +208,6 @@ class EntailmentFactChecker(FactChecker):
         self.max_pair_chars = max_pair_chars
 
     def _candidates(self, text: str) -> List[str]:
-        # Use TextProcessingUtils
         sents = TextProcessingUtils.sent_split(text)
         cands = list(sents)
         if self.use_pair_windows and len(sents) >= 2:
@@ -247,7 +218,6 @@ class EntailmentFactChecker(FactChecker):
         return cands
 
     def predict(self, fact: str, passages: List[dict]) -> str:
-        # Use TextProcessingUtils
         fact_toks = TextProcessingUtils.tokenize(fact)
         if not fact_toks:
             return "NS"
@@ -257,7 +227,7 @@ class EntailmentFactChecker(FactChecker):
         for p in passages:
             text = p.get("text", "") or ""
             for cand in self._candidates(text):
-                # Use TextProcessingUtils (recall and tokenize)
+
                 if TextProcessingUtils.recall(fact_toks, TextProcessingUtils.tokenize(cand)) < self.prune_recall:
                     continue
 
@@ -270,7 +240,6 @@ class EntailmentFactChecker(FactChecker):
 
         return "S" if best_entail_p >= self.entail_threshold else "NS"
 
-# --- Spacy-dependent class (Logic remains, just updated calls) ---
 
 try:
     import spacy
@@ -292,7 +261,6 @@ class DependencyRecallThresholdFactChecker(FactChecker):
 
     def predict(self, fact: str, passages: List[dict]) -> str:
         if self.nlp is None or not hasattr(self, "get_dependencies"):
-            # Fallback logic is unchanged
             return WordRecallThresholdFactChecker(threshold=0.52).predict(fact, passages)
 
         fact_rels = self.get_dependencies(fact)
@@ -302,12 +270,14 @@ class DependencyRecallThresholdFactChecker(FactChecker):
         best_recall = 0.0
         for p in passages:
             text = p.get("text", "") or ""
-            # Use TextProcessingUtils
             for sent in TextProcessingUtils.sent_split(text):
                 rels = self.get_dependencies(sent)
                 if not rels:
                     continue
                 inter = len(fact_rels & rels)
+
+                if len(fact_rels) == 0:
+                    continue
                 rec = inter / len(fact_rels)
                 if rec > best_recall:
                     best_recall = rec
@@ -316,7 +286,6 @@ class DependencyRecallThresholdFactChecker(FactChecker):
         return "S" if best_recall >= self.threshold else "NS"
 
     def get_dependencies(self, sent: str):
-        # This method's internal logic is unchanged
         if self.nlp is None:
             return set()
         processed_sent = self.nlp(sent)
