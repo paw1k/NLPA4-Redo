@@ -7,12 +7,17 @@ from typing import List, Tuple, Dict, Iterable, Set
 import numpy as np
 import torch
 
+# --- New TextProcessingUtils Class ---
+# All global helper functions and constants from the original code
+# have been moved into this utility class as static methods
+# and class attributes.
+
 class TextProcessingUtils:
     """
     A utility class containing static methods for text processing,
     such as tokenization, sentence splitting, and set-based metrics.
-    This replaces the global helper functions from the original code.
     """
+
     # Regex for finding words, including simple contractions
     TOKEN_REGEX = re.compile(r"[A-Za-z0-9]+(?:'[A-Za-z0-9]+)?")
 
@@ -23,356 +28,305 @@ class TextProcessingUtils:
         "he","she","they","them","his","her","their","we","you","i","me","my","your","our","ours","yours","not","no"
     }
 
+    # Number regex
+    NUMBER_REGEX = re.compile(r"\b\d{1,4}\b")
+
     @staticmethod
-    def tokenize_text(text: str, *, lowercase: bool = True, remove_stop: bool = True) -> List[str]:
+    def tokenize(text: str, *, lowercase: bool=True, remove_stop: bool=True) -> List[str]:
         """Tokenizes text, with options for lowercasing and stopword removal."""
         if not text:
             return []
         if lowercase:
             text = text.lower()
-        tokens = TextProcessingUtils.TOKEN_REGEX.findall(text)
+        toks = TextProcessingUtils.TOKEN_REGEX.findall(text)
         if remove_stop:
-            tokens = [tok for tok in tokens if tok not in TextProcessingUtils.STOPWORD_SET]
-        return tokens
+            toks = [t for t in toks if t not in TextProcessingUtils.STOPWORD_SET]
+        return toks
 
     @staticmethod
-    def split_into_sentences(text: str) -> List[str]:
-        """A fast, regex-based sentence splitter."""
+    def sent_split(text: str) -> List[str]:
+        """Splits text into sentences."""
         if not text:
             return []
-        # Clean up Wikipedia tags and extra whitespace
-        cleaned_text = re.sub(r"</?s>", " ", text)
-        cleaned_text = re.sub(r"\s+", " ", cleaned_text).strip()
-
-        # Primary split strategy
-        sentences = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9])", cleaned_text)
-
-        # Fallback for single-block text (e.g., newline-separated)
-        if len(sentences) == 1:
-            sentences = re.split(r"[\n]+|(?<=[.!?])", cleaned_text)
-
-        # Final cleanup
-        return [s.strip() for s in sentences if s.strip()]
+        t = re.sub(r"</?s>", " ", text)
+        t = re.sub(r"\s+", " ", t).strip()
+        pieces = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9])", t)
+        if len(pieces) == 1:
+            # Fallback for texts without clear sentence-ending punctuation followed by caps
+            pieces = re.split(r"[\n]+|(?<=[.!?])", t)
+            pieces = [p.strip() for p in pieces if p.strip()]
+        else:
+            pieces = [p.strip() for p in pieces if p.strip()]
+        return pieces
 
     @staticmethod
-    def calculate_jaccard(set_a: Iterable[str], set_b: Iterable[str]) -> float:
-        """Calculates Jaccard similarity between two iterables."""
-        A = set(set_a); B = set(set_b)
+    def jaccard(a: Iterable[str], b: Iterable[str]) -> float:
+        """Calculates Jaccard similarity between two iterables of strings."""
+        A = set(a); B = set(b)
         if not A and not B:
             return 0.0
-        intersection = len(A & B)
-        union = len(A | B)
-        return intersection / union if union else 0.0
+        inter = len(A & B); uni = len(A | B)
+        return inter / uni if uni else 0.0
 
     @staticmethod
-    def calculate_recall(fact_tokens: Iterable[str], text_tokens: Iterable[str]) -> float:
+    def recall(fact_tokens: Iterable[str], text_tokens: Iterable[str]) -> float:
         """Calculates recall of fact_tokens present in text_tokens."""
-        FactSet = set(fact_tokens)
-        TextSet = set(text_tokens)
-        if not FactSet:
+        F = set(fact_tokens); T = set(text_tokens)
+        if not F:
             return 0.0
-        return len(FactSet & TextSet) / len(FactSet)
+        return len(F & T) / len(F)
 
     @staticmethod
-    def extract_numbers(text: str) -> Set[str]:
-        """Extracts 1-4 digit numbers from text."""
-        return set(re.findall(r"\b\d{1,4}\b", text or ""))
+    def numbers(text: str) -> set:
+        """Extracts a set of 1-4 digit numbers from a string."""
+        return set(TextProcessingUtils.NUMBER_REGEX.findall(text or ""))
 
     @staticmethod
-    def generate_bigrams(tokens: List[str]) -> Set[Tuple[str, str]]:
+    def bigrams(tokens: List[str]) -> set:
         """Generates a set of bigrams from a list of tokens."""
         return set(zip(tokens, tokens[1:])) if len(tokens) >= 2 else set()
 
 
-class EvidenceItem(object):
-    """
-    Data class representing a single claim to be verified against
-    a list of source documents.
-    """
-    def __init__(self, claim: str, sources: List[dict], verdict: str):
-        self.claim = claim
-        self.sources = sources
-        self.verdict = verdict # S, NS, or IR
+# --- Data Structures and Models (Unchanged) ---
+
+class FactExample(object):
+    def __init__(self, fact: str, passages: List[dict], label: str):
+        self.fact = fact
+        self.passages = passages
+        self.label = label
 
     def __repr__(self) -> str:
-        return f"EvidenceItem(claim={self.claim!r}, sources={len(self.sources)} sources, verdict={self.verdict!r})"
+        return f"FactExample(fact={self.fact!r}, passages={len(self.passages)} passages, label={self.label!r})"
 
     def __str__(self) -> str:
         return self.__repr__()
 
 
-class NLIWrapper(object):
-    """
-    A wrapper for the Hugging Face entailment model, handling
-    tokenization, inference, and output normalization.
-    """
-    def __init__(self, model, tokenizer, use_gpu: bool = False):
+class EntailmentModel(object):
+    def __init__(self, model, tokenizer, cuda: bool=False):
         self.model = model
         self.tokenizer = tokenizer
-        self.use_gpu = use_gpu
+        self.cuda = cuda
 
-    def query_nli_model(self, context: str, statement: str) -> Dict[str, float]:
-        """
-        Runs a premise (context) and hypothesis (statement) through
-        the NLI model and returns a dictionary of probabilities.
-        """
+    def check_entailment(self, premise: str, hypothesis: str) -> Dict[str, float]:
         with torch.no_grad():
             inputs = self.tokenizer(
-                context,
-                statement,
+                premise,
+                hypothesis,
                 return_tensors='pt',
                 truncation=True,
                 padding=True,
                 max_length=512,
             )
-            if self.use_gpu:
-                inputs = {key: val.to('cuda') for key, val in inputs.items()}
-
+            if self.cuda:
+                inputs = {k: v.to('cuda') for k, v in inputs.items()}
             outputs = self.model(**inputs)
             logits = outputs.logits
+            probs = torch.softmax(logits, dim=-1).detach().cpu().numpy()[0]
 
-            # Get probabilities and move to CPU
-            probabilities_tensor = torch.softmax(logits, dim=-1).detach().cpu().numpy()[0]
-
-        # Explicitly delete tensors and run garbage collection
         del inputs, outputs, logits
-        if self.use_gpu:
-            torch.cuda.empty_cache()
         gc.collect()
 
-        # Normalize output labels
-        id_to_label_map = getattr(self.model.config, 'id2label', {0:'entailment', 1:'neutral', 2:'contradiction'})
-        probabilities = {'entailment': 0.0, 'neutral': 0.0, 'contradiction': 0.0}
-
-        for index, probability in enumerate(probabilities_tensor):
-            label = id_to_label_map.get(index, str(index)).lower()
-            if 'entail' in label:
-                norm_label = 'entailment'
-            elif 'contrad' in label:
-                norm_label = 'contradiction'
+        id2label = getattr(self.model.config, 'id2label', {0:'entailment',1:'neutral',2:'contradiction'})
+        out = { 'entailment': 0.0, 'neutral': 0.0, 'contradiction': 0.0 }
+        for idx, p in enumerate(probs):
+            lab = id2label.get(idx, str(idx)).lower()
+            if 'entail' in lab:
+                lab = 'entailment'
+            elif 'contrad' in lab:
+                lab = 'contradiction'
+            elif 'neutral' in lab:
+                lab = 'neutral'
             else:
-                norm_label = 'neutral'
-            probabilities[norm_label] = float(probability)
-
-        return probabilities
-
-
-class ClaimVerifier(object):
-    """Abstract base class for all fact-checking/verification models."""
-    def predict(self, claim: str, sources: List[dict]) -> str:
-        """
-        Predicts whether a claim is Supported ("S") or Not Supported ("NS")
-        based on the provided source passages.
-        """
-        raise NotImplementedError("Subclass must implement the 'predict' method.")
+                lab = 'neutral'
+            out[lab] = float(p)
+        return out
 
 
-class RandomVerifier(ClaimVerifier):
-    """Baseline model: Predicts "S" or "NS" at random."""
-    def predict(self, claim: str, sources: List[dict]) -> str:
-        return np.random.choice(["S", "NS"])
+# --- FactChecker Classes (Updated to use TextProcessingUtils) ---
+
+class FactChecker(object):
+    def predict(self, fact: str, passages: List[dict]) -> str:
+        raise Exception("Don't call me, call my subclasses")
 
 
-class SupportVerifier(ClaimVerifier):
-    """Baseline model: Always predicts "S" (Supported)."""
-    def predict(self, claim: str, sources: List[dict]) -> str:
+class RandomGuessFactChecker(FactChecker):
+    def predict(self, fact: str, passages: List[dict]) -> str:
+        prediction = np.random.choice(["S", "NS"])
+        return prediction
+
+
+class AlwaysEntailedFactChecker(FactChecker):
+    def predict(self, fact: str, passages: List[dict]) -> str:
         return "S"
 
 
-class HeuristicVerifier(ClaimVerifier):
-    """
-    A verifier based on word recall and other heuristics like
-    Jaccard similarity, bigram overlap, and number consistency.
-    """
+class WordRecallThresholdFactChecker(FactChecker):
     def __init__(self,
-                 recall_min: float = 0.50,
-                 jaccard_min: float = 0.18,
-                 require_gates: bool = True,
-                 require_numbers: bool = True):
-        self.recall_min = recall_min
-        self.jaccard_min = jaccard_min
-        self.require_gates = require_gates
-        self.require_numbers = require_numbers
+                 threshold: float = 0.50,
+                 jaccard_gate: float = 0.18,
+                 require_bigram_or_jaccard: bool = True,
+                 require_number_consistency: bool = True):
+        self.threshold = threshold
+        self.jaccard_gate = jaccard_gate
+        self.require_bigram_or_jaccard = require_bigram_or_jaccard
+        self.require_number_consistency = require_number_consistency
 
-    def _check_numeric_consistency(self, claim_text: str, sentence_text: str) -> bool:
-        """Checks if at least one number from the claim appears in the sentence."""
-        if not self.require_numbers:
+    def _num_consistent(self, fact: str, sent: str) -> bool:
+        if not self.require_number_consistency:
             return True
-        claim_numbers = TextProcessingUtils.extract_numbers(claim_text)
-        if not claim_numbers:
-            return True # No numbers to check
+        # Use TextProcessingUtils
+        fnums = TextProcessingUtils.numbers(fact)
+        if not fnums:
+            return True
+        # Use TextProcessingUtils
+        return len(fnums & TextProcessingUtils.numbers(sent)) > 0
 
-        sentence_numbers = TextProcessingUtils.extract_numbers(sentence_text)
-        return len(claim_numbers & sentence_numbers) > 0
-
-    def predict(self, claim: str, sources: List[dict]) -> str:
-        claim_toks = TextProcessingUtils.tokenize_text(claim)
-        if not claim_toks:
+    def predict(self, fact: str, passages: List[dict]) -> str:
+        # Use TextProcessingUtils
+        fact_toks = TextProcessingUtils.tokenize(fact)
+        if not fact_toks:
             return "NS"
 
-        claim_bigrams = TextProcessingUtils.generate_bigrams(claim_toks)
-        top_recall_score = 0.0
+        # Use TextProcessingUtils
+        fact_bi = TextProcessingUtils.bigrams(fact_toks)
+        best_recall = 0.0
 
-        for source in sources:
-            text = source.get("text", "") or ""
-            for sentence in TextProcessingUtils.split_into_sentences(text):
-                sentence_toks = TextProcessingUtils.tokenize_text(sentence)
-                if not sentence_toks:
+        for p in passages:
+            text = p.get("text", "") or ""
+            # Use TextProcessingUtils
+            for sent in TextProcessingUtils.sent_split(text):
+                # Use TextProcessingUtils
+                sent_toks = TextProcessingUtils.tokenize(sent)
+                if not sent_toks:
                     continue
 
-                recall_score = TextProcessingUtils.calculate_recall(claim_toks, sentence_toks)
+                # Use TextProcessingUtils
+                rec = TextProcessingUtils.recall(fact_toks, sent_toks)
+                if rec > best_recall:
+                    best_recall = rec
 
-                if recall_score > top_recall_score:
-                    top_recall_score = recall_score
-
-                if recall_score < self.recall_min:
+                if rec < self.threshold:
                     continue
 
-                # Check additional heuristic gates if required
-                passes_gates = True
-                if self.require_gates:
-                    common_bigrams = len(claim_bigrams & TextProcessingUtils.generate_bigrams(sentence_toks))
-                    jaccard_score = TextProcessingUtils.calculate_jaccard(claim_toks, sentence_toks)
-                    passes_gates = (common_bigrams > 0) or (jaccard_score >= self.jaccard_min)
+                gate_ok = True
+                if self.require_bigram_or_jaccard:
+                    # Use TextProcessingUtils
+                    shared_bi = len(fact_bi & TextProcessingUtils.bigrams(sent_toks))
+                    # Use TextProcessingUtils
+                    jac = TextProcessingUtils.jaccard(fact_toks, sent_toks)
+                    gate_ok = (shared_bi > 0) or (jac >= self.jaccard_gate)
 
-                if passes_gates and self._check_numeric_consistency(claim, sentence):
-                    return "S" # Found a strongly matching sentence
+                if gate_ok and self._num_consistent(fact, sent):
+                    return "S"
 
-        # Fallback check: If the best recall score was *just* under the wire
-        # or missed the gates, we give it a slight buffer.
-        return "S" if top_recall_score >= (self.recall_min + 0.05) else "NS"
+        return "S" if best_recall >= (self.threshold + 0.05) else "NS"
 
 
-class NliVerifier(ClaimVerifier):
-    """
-    A verifier using a pre-trained NLI (entailment) model.
-    Includes pruning and sentence-windowing optimizations.
-    """
-    def __init__(self, nli_model: NLIWrapper,
-                 support_threshold: float = 0.44,
-                 pruning_recall_cutoff: float = 0.04,
-                 use_sentence_pairs: bool = True,
-                 max_pair_length_chars: int = 360):
-        self.nli_model = nli_model
-        self.support_threshold = support_threshold
-        self.pruning_recall_cutoff = pruning_recall_cutoff
-        self.use_sentence_pairs = use_sentence_pairs
-        self.max_pair_length_chars = max_pair_length_chars
+class EntailmentFactChecker(FactChecker):
+    def __init__(self, ent_model: EntailmentModel,
+                 entail_threshold: float = 0.44,
+                 prune_recall: float = 0.04,
+                 use_pair_windows: bool = True,
+                 max_pair_chars: int = 360):
+        self.ent_model = ent_model
+        self.entail_threshold = entail_threshold
+        self.prune_recall = prune_recall
+        self.use_pair_windows = use_pair_windows
+        self.max_pair_chars = max_pair_chars
 
-    def _generate_text_chunks(self, text: str) -> List[str]:
-        """Creates a list of sentences and (optionally) sentence-pairs."""
-        sentences = TextProcessingUtils.split_into_sentences(text)
-        chunks = list(sentences)
+    def _candidates(self, text: str) -> List[str]:
+        # Use TextProcessingUtils
+        sents = TextProcessingUtils.sent_split(text)
+        cands = list(sents)
+        if self.use_pair_windows and len(sents) >= 2:
+            for i in range(len(sents) - 1):
+                pair = (sents[i] + " " + sents[i+1]).strip()
+                if len(pair) <= self.max_pair_chars:
+                    cands.append(pair)
+        return cands
 
-        if self.use_sentence_pairs and len(sentences) >= 2:
-            for i in range(len(sentences) - 1):
-                sentence_pair = (sentences[i] + " " + sentences[i+1]).strip()
-                if len(sentence_pair) <= self.max_pair_length_chars:
-                    chunks.append(sentence_pair)
-        return chunks
-
-    def predict(self, claim: str, sources: List[dict]) -> str:
-        claim_toks = TextProcessingUtils.tokenize_text(claim)
-        if not claim_toks:
+    def predict(self, fact: str, passages: List[dict]) -> str:
+        # Use TextProcessingUtils
+        fact_toks = TextProcessingUtils.tokenize(fact)
+        if not fact_toks:
             return "NS"
 
-        max_entail_prob = 0.0
+        best_entail_p = 0.0
 
-        for source in sources:
-            text = source.get("text", "") or ""
-            for chunk in self._generate_text_chunks(text):
-
-                # Pruning step: check recall before running the NLI model
-                chunk_toks = TextProcessingUtils.tokenize_text(chunk)
-                if TextProcessingUtils.calculate_recall(claim_toks, chunk_toks) < self.pruning_recall_cutoff:
+        for p in passages:
+            text = p.get("text", "") or ""
+            for cand in self._candidates(text):
+                # Use TextProcessingUtils (recall and tokenize)
+                if TextProcessingUtils.recall(fact_toks, TextProcessingUtils.tokenize(cand)) < self.prune_recall:
                     continue
 
-                # Run the expensive NLI model
-                probabilities = self.nli_model.query_nli_model(context=chunk, statement=claim)
-                entail_prob = probabilities["entailment"]
-
-                if entail_prob > max_entail_prob:
-                    max_entail_prob = entail_prob
-
-                    # Early exit optimization: if confidence is very high
-                    if max_entail_prob >= 0.90:
+                probs = self.ent_model.check_entailment(premise=cand, hypothesis=fact)
+                pe = probs["entailment"]
+                if pe > best_entail_p:
+                    best_entail_p = pe
+                    if best_entail_p >= 0.90:
                         return "S"
 
-        # Final decision based on the best score found
-        return "S" if max_entail_prob >= self.support_threshold else "NS"
+        return "S" if best_entail_p >= self.entail_threshold else "NS"
 
-# --- Optional Dependency-Based Verifier ---
+# --- Spacy-dependent class (Logic remains, just updated calls) ---
 
 try:
     import spacy
-    _SPACY_AVAILABLE = True
-except ImportError:
-    _SPACY_AVAILABLE = False
+    _HAVE_SPACY = True
+except Exception:
+    _HAVE_SPACY = False
 
 
-class DependencyVerifier(ClaimVerifier):
-    """
-    (Optional) A verifier that computes recall over dependency-parse
-    relations instead of simple words.
-    """
-    def __init__(self, min_recall: float = 0.5):
-        self.min_recall = min_recall
-        self.nlp = None
-        if _SPACY_AVAILABLE:
+class DependencyRecallThresholdFactChecker(FactChecker):
+    def __init__(self, threshold: float = 0.5):
+        self.threshold = threshold
+        if _HAVE_SPACY:
             try:
                 self.nlp = spacy.load('en_core_web_sm')
             except Exception:
-                # Fallback to a blank model if 'en_core_web_sm' isn't downloaded
                 self.nlp = spacy.blank("en")
+        else:
+            self.nlp = None
 
-    def predict(self, claim: str, sources: List[dict]) -> str:
-        if self.nlp is None or not hasattr(self, "extract_relations"):
-            # Fallback to heuristic verifier if spaCy fails or method is missing
-            return HeuristicVerifier(recall_min=0.52).predict(claim, sources)
+    def predict(self, fact: str, passages: List[dict]) -> str:
+        if self.nlp is None or not hasattr(self, "get_dependencies"):
+            # Fallback logic is unchanged
+            return WordRecallThresholdFactChecker(threshold=0.52).predict(fact, passages)
 
-        claim_relations = self.extract_relations(claim)
-        if not claim_relations:
+        fact_rels = self.get_dependencies(fact)
+        if not fact_rels:
             return "NS"
 
-        max_recall = 0.0
-        for source in sources:
-            text = source.get("text", "") or ""
-            for sentence in TextProcessingUtils.split_into_sentences(text):
-                sentence_relations = self.extract_relations(sentence)
-                if not sentence_relations:
+        best_recall = 0.0
+        for p in passages:
+            text = p.get("text", "") or ""
+            # Use TextProcessingUtils
+            for sent in TextProcessingUtils.sent_split(text):
+                rels = self.get_dependencies(sent)
+                if not rels:
                     continue
-
-                intersection_size = len(claim_relations & sentence_relations)
-                recall_val = intersection_size / len(claim_relations)
-
-                if recall_val > max_recall:
-                    max_recall = recall_val
-                    if max_recall >= self.min_recall:
+                inter = len(fact_rels & rels)
+                rec = inter / len(fact_rels)
+                if rec > best_recall:
+                    best_recall = rec
+                    if best_recall >= self.threshold:
                         return "S"
+        return "S" if best_recall >= self.threshold else "NS"
 
-        return "S" if max_recall >= self.min_recall else "NS"
-
-    def extract_relations(self, text: str) -> Set[Tuple[str, str, str]]:
-        """Extracts a set of (head, dep_label, child) relations."""
+    def get_dependencies(self, sent: str):
+        # This method's internal logic is unchanged
         if self.nlp is None:
             return set()
-
-        processed_doc = self.nlp(text)
+        processed_sent = self.nlp(sent)
         relations = set()
-
-        # Define dependencies to ignore
-        ignored_dependencies = {'punct', 'ROOT', 'root', 'det', 'case', 'aux', 'auxpass', 'dep', 'cop', 'mark', 'cc'}
-
-        for token in processed_doc:
-            if token.is_punct or token.dep_ in ignored_dependencies:
+        ignore_dep = {'punct', 'ROOT', 'root', 'det', 'case', 'aux', 'auxpass', 'dep', 'cop', 'mark', 'cc'}
+        for token in processed_sent:
+            if token.is_punct or token.dep_ in ignore_dep:
                 continue
-
-            # Lemmatize verbs, use text otherwise
-            head_text = token.head.lemma_ if token.head.pos_ == 'VERB' else token.head.text
-            dep_text = token.lemma_ if token.pos_ == 'VERB' else token.text
-
-            # Normalize to lowercase
-            rel_tuple = (head_text.lower(), token.dep_.lower(), dep_text.lower())
-            relations.add(rel_tuple)
-
+            head = token.head.lemma_ if token.head.pos_ == 'VERB' else token.head.text
+            dependent = token.lemma_ if token.pos_ == 'VERB' else token.text
+            relation = (head.lower(), token.dep_.lower(), dependent.lower())
+            relations.add(relation)
         return relations
